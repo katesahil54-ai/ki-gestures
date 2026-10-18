@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Ki Gestures – Goku powers with your hands</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bungee&family=Barlow:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#070912;--ink:#f4f1ff;--gold:#ffd23f;--ki:#5ad1ff;--fire:#ff7a1a;--dim:#9aa3c7;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:Barlow,system-ui,sans-serif;overflow:hidden}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+video{display:none}
+#power{position:fixed;left:0;right:0;top:calc(env(safe-area-inset-top,0px) + 14px);text-align:center;font-family:Bungee,Impact,sans-serif;
+font-size:clamp(28px,7vw,64px);color:var(--gold);text-shadow:0 0 18px var(--fire),0 3px 0 #7a2a00;opacity:0;transition:opacity .25s;pointer-events:none}
+#power.on{opacity:1}
+#scouter{position:fixed;left:12px;top:calc(env(safe-area-inset-top,0px) + 12px);font-family:Bungee,Impact,sans-serif;font-size:clamp(11px,2.4vw,17px);color:#7dff9a;background:rgba(0,30,10,.62);border:1px solid #3dff7a;border-radius:8px;padding:6px 10px;text-shadow:0 0 8px #3dff7a;pointer-events:none;max-width:44vw}
+#legend{position:fixed;left:0;right:0;bottom:calc(env(safe-area-inset-bottom,0px) + 10px);display:flex;gap:8px;flex-wrap:wrap;justify-content:center;padding:0 10px}
+#legend span{background:rgba(7,9,18,.72);border:1px solid rgba(255,210,63,.35);border-radius:8px;padding:6px 10px;font-size:13px;font-weight:500;color:var(--ink)}
+#legend b{color:var(--gold);font-weight:700}
+#intro{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;text-align:center;padding:24px;
+background:radial-gradient(circle at 50% 40%,#1b2a66 0%,var(--bg) 70%)}
+#intro h1{font-family:Bungee,Impact,sans-serif;font-weight:400;font-size:clamp(34px,8vw,84px);margin:0;color:var(--gold);text-shadow:0 0 28px var(--fire),0 4px 0 #7a2a00;line-height:1}
+#intro p{max-width:46ch;margin:0;color:var(--dim);font-size:18px;line-height:1.45}
+#go{font-family:Bungee,Impact,sans-serif;font-size:20px;padding:14px 30px;border:0;border-radius:10px;background:var(--fire);color:#1a0a00;cursor:pointer;box-shadow:0 0 24px rgba(255,122,26,.6)}
+#go:focus-visible{outline:3px solid var(--ki);outline-offset:3px}
+#go:disabled{opacity:.6;cursor:wait}
+#msg{min-height:1.4em;color:var(--ki);font-size:15px;max-width:50ch}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<video id="v" playsinline muted></video>
+<div id="scouter">Power level 0</div>
+<div id="power" aria-live="polite"></div>
+<div id="legend">
+  <span><b>Fist</b> Super Saiyan</span>
+  <span><b>Open palm</b> Spirit Bomb</span>
+  <span><b>Both hands together, then pull apart</b> Kamehameha</span>
+  <span><b>Point</b> Ki blasts</span>
+  <span><b>Two fingers</b> Instant Transmission</span>
+  <span><b>OK sign</b> Destructo Disc (hold, then release; it ricochets)</span>
+  <span><b>Three fingers</b> Ultra Instinct</span>
+  <span><b>Both fists</b> Kaio-ken</span>
+</div>
+<div id="intro">
+  <h1>Ki Gestures</h1>
+  <p>Show your hands to the camera and unleash Goku’s power. Stand back so both hands are visible. Your video stays on your device.</p>
+  <button id="go">Start camera</button>
+  <div id="msg" role="status"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d'),vid=document.getElementById('v');
+const pw=document.getElementById('power'),msg=document.getElementById('msg'),go=document.getElementById('go');
+let W=0,H=0;
+function resize(){W=cv.width=innerWidth;H=cv.height=innerHeight}
+addEventListener('resize',resize);resize();
+
+let hands=null,res=[],ready=false;
+const P=[],blasts=[],rings=[];
+let aura=0,bomb=0,kame=0,disc=0,ui=0,kaio=false,pl=0,discs=[],hv=null,beam=null,flash=0,shake=0,tpCool=0,blastCool=0,label='',labelT=0;
+const rnd=Math.random;
+
+function emit(x,y,n,hue,sp,up,size,life){
+  for(let i=0;i<n;i++){const a=rnd()*6.283,s=rnd()*sp;
+    P.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-up,l:life*(.5+rnd()*.5),m:life,h:hue+rnd()*24-12,s:size*(.5+rnd())});}
+}
+function say(t){label=t;labelT=.35}
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
+const scouterEl=document.getElementById('scouter');
+function drawDisc(x,y,r,a){
+  glow(x,y,r*1.7,'rgba(255,255,255,.9)','rgba(255,90,200,.5)');
+  ctx.save();ctx.translate(x,y);ctx.rotate(a);ctx.fillStyle='rgba(255,225,120,.92)';ctx.beginPath();
+  for(let k=0;k<24;k++){const rr=k%2?r:r*.7,an=k*Math.PI/12;ctx.lineTo(Math.cos(an)*rr,Math.sin(an)*rr);}
+  ctx.closePath();ctx.fill();ctx.fillStyle='rgba(255,255,255,.9)';ctx.beginPath();ctx.arc(0,0,r*.35,0,6.283);ctx.fill();ctx.restore();
+}
+
+function analyze(lm){
+  const pt=lm.map(l=>({x:W-(ox+l.x*vw*sc),y:oy+l.y*vh*sc}));
+  const ext=(t,p)=>dist(pt[t],pt[0])>dist(pt[p],pt[0])*1.15;
+  const i=ext(8,6),m=ext(12,10),r=ext(16,14),p=ext(20,18);
+  const c={x:(pt[0].x+pt[5].x+pt[9].x+pt[13].x+pt[17].x)/5,y:(pt[0].y+pt[5].y+pt[9].y+pt[13].y+pt[17].y)/5};
+  let g='none';
+  if(dist(pt[4],pt[8])<dist(pt[5],pt[0])*.4&&m&&r&&p)g='pinch';else if(i&&m&&r&&p)g='open';else if(i&&m&&r&&!p)g='three';else if(!i&&!m&&!r&&!p)g='fist';
+  else if(i&&!m&&!r&&!p)g='point';else if(i&&m&&!r&&!p)g='two';
+  return{pt,c,g};
+}
+
+function glow(x,y,r,c0,c1){
+  const g=ctx.createRadialGradient(x,y,0,x,y,r);
+  g.addColorStop(0,c0);g.addColorStop(.35,c1);g.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(x,y,r,0,6.283);ctx.fill();
+}
+function bolt(x,y,len){
+  ctx.beginPath();ctx.moveTo(x,y);let a=rnd()*6.283;
+  for(let k=0;k<6;k++){a+=rnd()-.5;x+=Math.cos(a)*len/6;y+=Math.sin(a)*len/6;ctx.lineTo(x,y);}
+  ctx.stroke();
+}
+
+let ox=0,oy=0,sc=1,vw=1,vh=1,last=0,pumpBusy=false;
+function frame(t){
+  const dt=Math.min(.05,(t-last)/1000||.016);last=t;
+  ctx.setTransform(1,0,0,1,0,0);ctx.globalCompositeOperation='source-over';ctx.fillStyle='#070912';ctx.fillRect(0,0,W,H);
+  if(ready&&vid.videoWidth){
+    vw=vid.videoWidth;vh=vid.videoHeight;sc=Math.max(W/vw,H/vh);ox=(W-vw*sc)/2;oy=(H-vh*sc)/2;
+    if(shake>0){ctx.translate((rnd()-.5)*shake*18,(rnd()-.5)*shake*18);}
+    ctx.save();ctx.translate(W,0);ctx.scale(-1,1);ctx.drawImage(vid,ox,oy,vw*sc,vh*sc);ctx.restore();
+    ctx.fillStyle='rgba(5,7,16,.3)';ctx.fillRect(-30,-30,W+60,H+60);
+    run(dt);
+  }
+  requestAnimationFrame(frame);
+}
+
+function run(dt){
+  const hs=res.map(analyze);
+  ctx.globalCompositeOperation='lighter';
+  let anyFist=false,anyOpen=false;
+  kaio=hs.length>=2&&hs.every(h=>h.g==='fist');
+  tpCool-=dt;blastCool-=dt;shake=Math.max(0,shake-dt*2);flash=Math.max(0,flash-dt*2.5);
+
+  // Kamehameha with two hands
+  let k2=false;
+  if(hs.length>=2){
+    const a=hs[0].c,b=hs[1].c,d=dist(a,b),mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
+    if(d<W*.26&&!beam){
+      k2=true;kame=Math.min(1.6,kame+dt);
+      const r=18+kame*70;glow(mx,my,r*1.8,'rgba(255,255,255,.95)','rgba(90,209,255,.55)');
+      glow(mx,my,r*.7,'rgba(255,255,255,1)','rgba(160,230,255,.9)');
+      emit(mx,my,3,200,120,0,5,.5);
+      for(let n=0;n<2;n++){const an=rnd()*6.283,R=r*2.4;P.push({x:mx+Math.cos(an)*R,y:my+Math.sin(an)*R,vx:-Math.cos(an)*R*2.2,vy:-Math.sin(an)*R*2.2,l:.45,m:.45,h:200,s:4});}
+      say('Ka… me… ha… me…');
+    } else if(kame>.9&&d>W*.36&&!beam){
+      const dir=mx<W/2?1:-1;beam={x:mx,y:my,dir,t:0};kame=0;flash=.7;shake=1;
+    } else kame=Math.max(0,kame-dt*.8);
+  } else kame=Math.max(0,kame-dt);
+
+  for(const h of hs){
+    const {c,g,pt}=h;
+    if(g==='fist'){anyFist=true;
+      glow(c.x,c.y,90+aura*130,kaio?'rgba(255,200,180,.9)':'rgba(255,240,150,.9)',kaio?'rgba(255,30,20,.55)':'rgba(255,160,30,.45)');
+      emit(c.x+(rnd()-.5)*50,c.y+(rnd()-.5)*30,Math.ceil(2+aura*5),kaio?2:48,70,220+aura*160,10,.9);
+      if(aura>.6){ctx.strokeStyle='rgba(255,240,120,.9)';ctx.lineWidth=2;ctx.shadowColor='#ffd23f';ctx.shadowBlur=12;bolt(c.x,c.y,160+rnd()*120);ctx.shadowBlur=0;}
+    }
+    if(g==='open'&&!k2){anyOpen=true;
+      const R=30+bomb*130,bx=c.x,by=Math.max(R+10,c.y-130-R*.6);
+      glow(bx,by,R*1.8,'rgba(255,255,255,.9)','rgba(70,160,255,.5)');
+      glow(bx,by,R*.8,'rgba(255,255,255,1)','rgba(150,215,255,.9)');
+      for(let n=0;n<3;n++){const an=rnd()*6.283,RR=R*2.8;P.push({x:bx+Math.cos(an)*RR,y:by+Math.sin(an)*RR,vx:-Math.cos(an)*RR*1.6,vy:-Math.sin(an)*RR*1.6,l:.6,m:.6,h:205,s:4});}
+      ctx.strokeStyle='rgba(120,190,255,.35)';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(c.x,c.y);ctx.lineTo(bx,by+R*.6);ctx.stroke();
+    }
+    if(g==='point'&&blastCool<=0){
+      const tip=pt[8],base=pt[6],dx=tip.x-base.x,dy=tip.y-base.y,l=Math.hypot(dx,dy)||1;
+      blasts.push({x:tip.x,y:tip.y,vx:dx/l*1500,vy:dy/l*1500});blastCool=.11;say('Ki blast!');
+      emit(tip.x,tip.y,6,55,150,0,5,.3);
+    }
+    if(g==='two'&&tpCool<=0){
+      tpCool=1.3;flash=1;shake=.7;rings.push({x:c.x,y:c.y,r:10});rings.push({x:c.x,y:c.y,r:-30});say('Instant Transmission!');
+    }
+  }
+
+  const pH=hs.find(h=>h.g==='pinch'),uH=hs.find(h=>h.g==='three'),now=performance.now();
+  if(pH){const m={x:(pH.pt[4].x+pH.pt[8].x)/2,y:(pH.pt[4].y+pH.pt[8].y)/2};
+    if(hv){hv.vx=hv.vx*.7+(m.x-hv.x)/dt*.3;hv.vy=hv.vy*.7+(m.y-hv.y)/dt*.3;hv.x=m.x;hv.y=m.y}else hv={x:m.x,y:m.y,vx:0,vy:0};
+    disc=Math.min(1,disc+dt*1.2);drawDisc(m.x,m.y-30-disc*40,20+disc*60,now/50);say('Destructo Disc!');
+  }else{
+    if(disc>.3&&hv){const sp=Math.hypot(hv.vx,hv.vy),fast=sp>500,k=Math.min(1.6,2200/(sp||1));
+      discs.push({x:hv.x,y:hv.y-30-disc*40,r:20+disc*60,vx:fast?hv.vx*k:(hv.x<W/2?1:-1)*1100,vy:fast?hv.vy*k:0,b:0});}
+    disc=0;hv=null;}
+  for(let i=discs.length-1;i>=0;i--){const d=discs[i];d.x+=d.vx*dt;d.y+=d.vy*dt;
+    if((d.x<d.r&&d.vx<0)||(d.x>W-d.r&&d.vx>0)){d.vx*=-1;d.b++;emit(d.x,d.y,25,330,300,0,7,.5);shake=.6}
+    if((d.y<d.r&&d.vy<0)||(d.y>H-d.r&&d.vy>0)){d.vy*=-1;d.b++;emit(d.x,d.y,25,330,300,0,7,.5);shake=.6}
+    drawDisc(d.x,d.y,d.r,now/40);emit(d.x,d.y,2,320,60,0,6,.4);if(d.b>4)discs.splice(i,1);}
+  ui=uH?Math.min(1,ui+dt*.9):Math.max(0,ui-dt*1.2);
+  if(uH){emit(uH.c.x,uH.c.y,4,215,180,120,8,.9);glow(uH.c.x,uH.c.y,150,'rgba(255,255,255,.9)','rgba(170,190,255,.45)');say(ui>.6?'Ultra Instinct!':'Mastering…')}
+  if(ui>0){const o=(50+30*Math.sin(now/180))*ui;for(const dx of[-o,o]){ctx.save();ctx.globalAlpha=.28*ui;ctx.translate(W+dx,0);ctx.scale(-1,1);ctx.drawImage(vid,ox,oy,vw*sc,vh*sc);ctx.restore()}
+    ctx.fillStyle=`rgba(190,205,255,${.1*ui})`;ctx.fillRect(-30,-30,W+60,H+60)}
+  const tg=530+aura*(kaio?60000:12000)+bomb*90000+disc*15000+ui*180000+(beam?600000:0)+blasts.length*400;
+  pl+=(tg-pl)*Math.min(1,dt*3);
+  scouterEl.textContent='Power level '+Math.round(pl).toLocaleString('en-US')+(pl>9000?' – it’s over 9000!':'');
+  aura=anyFist?Math.min(1,aura+dt*.7):Math.max(0,aura-dt*1.5);
+  bomb=anyOpen?Math.min(1,bomb+dt*.35):Math.max(0,bomb-dt*.9);
+  if(anyFist)say(kaio?'Kaio-ken times ten!':aura>.7?'Super Saiyan!':'Power rising…');
+  if(anyOpen&&!k2)say(bomb>.8?'Spirit Bomb!':'Gathering energy…');
+  if(aura>0){ctx.fillStyle=`rgba(${kaio?'255,30,20':'255,190,40'},${(kaio?.26:.16)*aura*(.8+rnd()*.2)})`;ctx.fillRect(-30,-30,W+60,H+60);}
+  if(bomb>.7){ctx.fillStyle=`rgba(80,150,255,${.1*bomb})`;ctx.fillRect(-30,-30,W+60,H+60);}
+
+  // Beam
+  if(beam){
+    beam.t+=dt;shake=Math.max(shake,.8);
+    const len=Math.min(1,beam.t/.18)*W*1.3,fade=1-Math.max(0,(beam.t-1.1)/.6),w=150*fade*(1+Math.sin(beam.t*60)*.06);
+    const x0=beam.x,x1=beam.x+beam.dir*len,rx=Math.min(x0,x1),rw=Math.abs(x1-x0);
+    ctx.shadowColor='#5ad1ff';ctx.shadowBlur=50;
+    ctx.fillStyle='rgba(60,150,255,.45)';ctx.fillRect(rx,beam.y-w/2,rw,w);
+    ctx.fillStyle='rgba(140,220,255,.75)';ctx.fillRect(rx,beam.y-w*.32,rw,w*.64);
+    ctx.fillStyle='rgba(255,255,255,.95)';ctx.fillRect(rx,beam.y-w*.14,rw,w*.28);
+    ctx.shadowBlur=0;glow(beam.x,beam.y,w*1.4,'rgba(255,255,255,1)','rgba(90,209,255,.6)');
+    emit(x1,beam.y+(rnd()-.5)*w,6,200,300,0,7,.5);
+    emit(beam.x+beam.dir*rnd()*len,beam.y+(rnd()-.5)*w,4,195,200,0,5,.4);
+    say('KAMEHAMEHA!');
+    if(beam.t>1.7)beam=null;
+  }
+
+  // Ki blasts
+  for(let i=blasts.length-1;i>=0;i--){const b=blasts[i];b.x+=b.vx*dt;b.y+=b.vy*dt;
+    glow(b.x,b.y,38,'rgba(255,255,255,1)','rgba(255,210,63,.7)');emit(b.x,b.y,2,50,40,0,5,.35);
+    if(b.x<-60||b.x>W+60||b.y<-60||b.y>H+60){emit(Math.min(W,Math.max(0,b.x)),Math.min(H,Math.max(0,b.y)),20,45,320,0,8,.5);blasts.splice(i,1);}}
+
+  // Shockwave rings
+  for(let i=rings.length-1;i>=0;i--){const r=rings[i];r.r+=dt*1300;if(r.r<0)continue;
+    const a=Math.max(0,1-r.r/Math.max(W,H));ctx.strokeStyle=`rgba(160,230,255,${a})`;ctx.lineWidth=10*a+2;
+    ctx.beginPath();ctx.arc(r.x,r.y,r.r,0,6.283);ctx.stroke();if(a<=0)rings.splice(i,1);}
+
+  // Particles
+  for(let i=P.length-1;i>=0;i--){const p=P[i];p.x+=p.vx*dt;p.y+=p.vy*dt;p.l-=dt;
+    if(p.l<=0){P.splice(i,1);continue;}
+    const a=p.l/p.m;ctx.fillStyle=`hsla(${p.h},100%,${55+a*25}%,${a})`;ctx.beginPath();ctx.arc(p.x,p.y,p.s*a+1,0,6.283);ctx.fill();}
+  if(P.length>1500)P.splice(0,P.length-1500);
+
+  if(flash>0){ctx.fillStyle=`rgba(255,255,255,${flash*.8})`;ctx.fillRect(-30,-30,W+60,H+60);}
+  if(!hs.length)say('Show your hands');
+  labelT-=dt;
+  pw.textContent=label;pw.classList.toggle('on',labelT>0&&label!=='Show your hands'||(!hs.length));
+}
+
+async function pump(){
+  if(!pumpBusy&&vid.readyState>=2&&hands){pumpBusy=true;try{await hands.send({image:vid})}catch(e){}pumpBusy=false;}
+  requestAnimationFrame(pump);
+}
+
+go.onclick=async()=>{
+  go.disabled=true;msg.textContent='Asking for camera access…';
+  try{
+    const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}},audio:false});
+    vid.srcObject=s;await vid.play();
+  }catch(e){
+    msg.textContent='Camera blocked. Allow camera access for this page in your browser’s address bar, then press Start camera again.';go.disabled=false;return;
+  }
+  msg.textContent='Loading hand tracking…';
+  try{
+    hands=new Hands({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${f}`});
+    hands.setOptions({maxNumHands:2,modelComplexity:0,minDetectionConfidence:.6,minTrackingConfidence:.5});
+    hands.onResults(r=>{res=r.multiHandLandmarks||[]});
+    await hands.initialize();
+  }catch(e){
+    msg.textContent='Hand tracking could not load. Check your connection and try again.';go.disabled=false;return;
+  }
+  ready=true;document.getElementById('intro').style.display='none';
+  requestAnimationFrame(pump);
+};
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
